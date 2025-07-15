@@ -1,5 +1,5 @@
 /*
- *   Copyright (C) 2015,2016,2018,2020,2021 by Jonathan Naylor G4KLX
+ *   Copyright (C) 2020,2021 by Jonathan Naylor G4KLX
  *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -16,28 +16,19 @@
  *   Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
-#if !defined(SYNC_H)
-#define	SYNC_H
+#if !defined(M17CRC_H)
+#define	M17CRC_H
 
-class CSync
+#include <cstdint>
+
+class CM17CRC
 {
 public:
-	static void addDStarSync(unsigned char* data);
-
-	static void addDMRDataSync(unsigned char* data, bool duplex);
-	static void addDMRAudioSync(unsigned char* data, bool duplex);
-
-	static void addYSFSync(unsigned char* data);
-
-	static void addP25Sync(unsigned char* data);
-
-	static void addNXDNSync(unsigned char* data);
-
-	static void addM17LinkSetupSync(unsigned char* data);
-	static void addM17StreamSync(unsigned char* data);
-	static void addM17EOTSync(unsigned char* data);
+	static bool checkCRC16(const unsigned char* in, unsigned int nBytes);
+	static void encodeCRC16(unsigned char* in, unsigned int nBytes);
 
 private:
+	static uint16_t createCRC16(const unsigned char* in, unsigned int nBytes);
 };
 
 #endif

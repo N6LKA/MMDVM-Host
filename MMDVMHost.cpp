@@ -139,6 +139,7 @@ m_dmr(nullptr),
 m_ysf(nullptr),
 m_p25(nullptr),
 m_nxdn(nullptr),
+m_m17(nullptr),
 m_pocsag(nullptr),
 m_fm(nullptr),
 m_ax25(nullptr),
@@ -147,6 +148,7 @@ m_dmrNetwork(nullptr),
 m_ysfNetwork(nullptr),
 m_p25Network(nullptr),
 m_nxdnNetwork(nullptr),
+m_m17Network(nullptr),
 m_pocsagNetwork(nullptr),
 m_fmNetwork(nullptr),
 m_ax25Network(nullptr),
@@ -157,12 +159,14 @@ m_dmrRFModeHang(10U),
 m_ysfRFModeHang(10U),
 m_p25RFModeHang(10U),
 m_nxdnRFModeHang(10U),
+m_m17RFModeHang(10U),
 m_fmRFModeHang(10U),
 m_dstarNetModeHang(3U),
 m_dmrNetModeHang(3U),
 m_ysfNetModeHang(3U),
 m_p25NetModeHang(3U),
 m_nxdnNetModeHang(3U),
+m_m17NetModeHang(3U),
 m_pocsagNetModeHang(3U),
 m_fmNetModeHang(3U),
 m_modeTimer(1000U),
@@ -175,6 +179,7 @@ m_dmrEnabled(false),
 m_ysfEnabled(false),
 m_p25Enabled(false),
 m_nxdnEnabled(false),
+m_m17Enabled(false),
 m_pocsagEnabled(false),
 m_fmEnabled(false),
 m_ax25Enabled(false),
@@ -321,6 +326,11 @@ int CMMDVMHost::run()
 		m_nxdnEnabled = false;
 	}
 
+	if (m_m17Enabled && !m_modem->hasM17()) {
+		LogWarning("M17 enabled in the host but not in the modem firmware, disabling");
+		m_m17Enabled = false;
+	}
+
 	if (m_fmEnabled && !m_modem->hasFM()) {
 		LogWarning("FM enabled in the host but not in the modem firmware, disabling");
 		m_fmEnabled = false;
@@ -366,6 +376,12 @@ int CMMDVMHost::run()
 
 	if (m_nxdnEnabled && m_conf.getNXDNNetworkEnabled()) {
 		ret = createNXDNNetwork();
+		if (!ret)
+			return 1;
+	}
+
+	if (m_m17Enabled && m_conf.getM17NetworkEnabled()) {
+		ret = createM17Network();
 		if (!ret)
 			return 1;
 	}
@@ -674,6 +690,23 @@ int CMMDVMHost::run()
 		m_nxdn = new CNXDNControl(ran, id, selfOnly, m_nxdnNetwork, m_display, m_timeout, m_duplex, remoteGateway, m_nxdnLookup, rssi);
 	}
 
+	if (m_m17Enabled) {
+		bool selfOnly          = m_conf.getM17SelfOnly();
+		unsigned int can       = m_conf.getM17CAN();
+		bool allowEncryption   = m_conf.getM17AllowEncryption();
+		unsigned int txHang    = m_conf.getM17TXHang();
+		m_m17RFModeHang        = m_conf.getM17ModeHang();
+
+		LogInfo("M17 RF Parameters");
+		LogInfo("    Self Only: %s", selfOnly ? "yes" : "no");
+		LogInfo("    CAN: %u", can);
+		LogInfo("    Allow Encryption: %s", allowEncryption ? "yes" : "no");
+		LogInfo("    TX Hang: %us", txHang);
+		LogInfo("    Mode Hang: %us", m_m17RFModeHang);
+
+		m_m17 = new CM17Control(m_callsign, can, selfOnly, allowEncryption, m_m17Network, m_display, m_timeout, m_duplex, rssi);
+	}
+
 	CTimer pocsagTimer(1000U, 30U);
 
 	if (m_pocsagEnabled) {
@@ -897,6 +930,23 @@ int CMMDVMHost::run()
 			}
 		}
 
+		len = m_modem->readM17Data(data);
+		if (m_m17 != nullptr && m_m17Enabled && len > 0U) {
+			if (m_mode == MODE_IDLE) {
+				bool ret = m_m17->writeModem(data, len);
+				if (ret) {
+					m_modeTimer.setTimeout(m_m17RFModeHang);
+					setMode(MODE_M17);
+				}
+			} else if (m_mode == MODE_M17) {
+				bool ret = m_m17->writeModem(data, len);
+				if (ret)
+					m_modeTimer.start();
+			} else if (m_mode != MODE_LOCKOUT) {
+				LogWarning("M17 modem data received when in mode %u", m_mode);
+			}
+		}
+
 		len = m_modem->readFMData(data);
 		if (m_fm != nullptr && m_fmEnabled && len > 0U) {
 			if (m_mode == MODE_IDLE) {
@@ -1054,6 +1104,25 @@ int CMMDVMHost::run()
 			}
 		}
 
+		if (m_m17 != nullptr && m_m17Enabled) {
+			ret = m_modem->hasM17Space();
+			if (ret) {
+				len = m_m17->readModem(data);
+				if (len > 0U) {
+					if (m_mode == MODE_IDLE) {
+						m_modeTimer.setTimeout(m_m17NetModeHang);
+						setMode(MODE_M17);
+					}
+					if (m_mode == MODE_M17) {
+						m_modem->writeM17Data(data, len);
+						m_modeTimer.start();
+					} else if (m_mode != MODE_LOCKOUT) {
+						LogWarning("M17 data received when in mode %u", m_mode);
+					}
+				}
+			}
+		}
+
 		if (m_pocsag != nullptr && m_pocsagEnabled) {
 			ret = m_modem->hasPOCSAGSpace();
 			if (ret) {
@@ -1147,6 +1216,8 @@ int CMMDVMHost::run()
 			m_p25->clock(ms);
 		if (m_nxdn != nullptr)
 			m_nxdn->clock(ms);
+		if (m_m17 != nullptr)
+			m_m17->clock(ms);
 		if (m_pocsag != nullptr)
 			m_pocsag->clock(ms);
 		if (m_fm != nullptr)
@@ -1162,6 +1233,8 @@ int CMMDVMHost::run()
 			m_p25Network->clock(ms);
 		if (m_nxdnNetwork != nullptr)
 			m_nxdnNetwork->clock(ms);
+		if (m_m17Network != nullptr)
+			m_m17Network->clock(ms);
 		if (m_pocsagNetwork != nullptr)
 			m_pocsagNetwork->clock(ms);
 		if (m_fmNetwork != nullptr)
@@ -1270,6 +1343,11 @@ int CMMDVMHost::run()
 		delete m_nxdnNetwork;
 	}
 
+	if (m_m17Network != nullptr) {
+		m_m17Network->close();
+		delete m_m17Network;
+	}
+
 	if (m_pocsagNetwork != nullptr) {
 		m_pocsagNetwork->close();
 		delete m_pocsagNetwork;
@@ -1302,6 +1380,7 @@ int CMMDVMHost::run()
 	delete m_ysf;
 	delete m_p25;
 	delete m_nxdn;
+	delete m_m17;
 	delete m_pocsag;
 	delete m_fm;
 	delete m_ax25;
@@ -1342,6 +1421,7 @@ bool CMMDVMHost::createModem()
 	float ysfTXLevel             = m_conf.getModemYSFTXLevel();
 	float p25TXLevel             = m_conf.getModemP25TXLevel();
 	float nxdnTXLevel            = m_conf.getModemNXDNTXLevel();
+	float m17TXLevel             = m_conf.getModemM17TXLevel();
 	float pocsagTXLevel          = m_conf.getModemPOCSAGTXLevel();
 	float fmTXLevel              = m_conf.getModemFMTXLevel();
 	float ax25TXLevel            = m_conf.getModemAX25TXLevel();
@@ -1352,6 +1432,7 @@ bool CMMDVMHost::createModem()
 	unsigned int ysfTXHang       = m_conf.getFusionTXHang();
 	unsigned int p25TXHang       = m_conf.getP25TXHang();
 	unsigned int nxdnTXHang      = m_conf.getNXDNTXHang();
+	unsigned int m17TXHang       = m_conf.getM17TXHang();
 	unsigned int rxFrequency     = m_conf.getRXFrequency();
 	unsigned int txFrequency     = m_conf.getTXFrequency();
 	unsigned int pocsagFrequency = m_conf.getPOCSAGFrequency();
@@ -1402,6 +1483,7 @@ bool CMMDVMHost::createModem()
 	LogInfo("    YSF TX Level: %.1f%%", ysfTXLevel);
 	LogInfo("    P25 TX Level: %.1f%%", p25TXLevel);
 	LogInfo("    NXDN TX Level: %.1f%%", nxdnTXLevel);
+	LogInfo("    M17 TX Level: %.1f%%", m17TXLevel);
 	LogInfo("    POCSAG TX Level: %.1f%%", pocsagTXLevel);
 	LogInfo("    FM TX Level: %.1f%%", fmTXLevel);
 	LogInfo("    AX.25 TX Level: %.1f%%", ax25TXLevel);
@@ -1425,13 +1507,14 @@ bool CMMDVMHost::createModem()
 		return false;
 
 	m_modem->setPort(port);
-	m_modem->setModeParams(m_dstarEnabled, m_dmrEnabled, m_ysfEnabled, m_p25Enabled, m_nxdnEnabled, m_pocsagEnabled, m_fmEnabled, m_ax25Enabled);
-	m_modem->setLevels(rxLevel, cwIdTXLevel, dstarTXLevel, dmrTXLevel, ysfTXLevel, p25TXLevel, nxdnTXLevel, pocsagTXLevel, fmTXLevel, ax25TXLevel);
+	m_modem->setModeParams(m_dstarEnabled, m_dmrEnabled, m_ysfEnabled, m_p25Enabled, m_nxdnEnabled, m_m17Enabled, m_pocsagEnabled, m_fmEnabled, m_ax25Enabled);
+	m_modem->setLevels(rxLevel, cwIdTXLevel, dstarTXLevel, dmrTXLevel, ysfTXLevel, p25TXLevel, nxdnTXLevel, m17TXLevel, pocsagTXLevel, fmTXLevel, ax25TXLevel);
 	m_modem->setRFParams(rxFrequency, rxOffset, txFrequency, txOffset, txDCOffset, rxDCOffset, rfLevel, pocsagFrequency);
 	m_modem->setDMRParams(colorCode);
 	m_modem->setYSFParams(lowDeviation, ysfTXHang);
 	m_modem->setP25Params(p25TXHang);
 	m_modem->setNXDNParams(nxdnTXHang);
+	m_modem->setM17Params(m17TXHang);
 	m_modem->setAX25Params(rxTwist, ax25TXDelay, ax25SlotTime, ax25PPersist);
 
 	if (m_fmEnabled) {
@@ -1741,6 +1824,35 @@ bool CMMDVMHost::createNXDNNetwork()
 	return true;
 }
 
+bool CMMDVMHost::createM17Network()
+{
+	std::string gatewayAddress = m_conf.getM17GatewayAddress();
+	unsigned short gatewayPort = m_conf.getM17GatewayPort();
+	std::string localAddress   = m_conf.getM17LocalAddress();
+	unsigned short localPort   = m_conf.getM17LocalPort();
+	m_m17NetModeHang           = m_conf.getM17NetworkModeHang();
+	bool debug                 = m_conf.getM17NetworkDebug();
+
+	LogInfo("M17 Network Parameters");
+	LogInfo("    Gateway Address: %s", gatewayAddress.c_str());
+	LogInfo("    Gateway Port: %hu", gatewayPort);
+	LogInfo("    Local Address: %s", localAddress.c_str());
+	LogInfo("    Local Port: %hu", localPort);
+	LogInfo("    Mode Hang: %us", m_m17NetModeHang);
+
+	m_m17Network = new CM17Network(localAddress, localPort, gatewayAddress, gatewayPort, debug);
+	bool ret = m_m17Network->open();
+	if (!ret) {
+		delete m_m17Network;
+		m_m17Network = nullptr;
+		return false;
+	}
+
+	m_m17Network->enable(true);
+
+	return true;
+}
+
 bool CMMDVMHost::createPOCSAGNetwork()
 {
 	std::string gatewayAddress = m_conf.getPOCSAGGatewayAddress();
@@ -1849,6 +1961,7 @@ void CMMDVMHost::readParams()
 	m_ysfEnabled    = m_conf.getFusionEnabled();
 	m_p25Enabled    = m_conf.getP25Enabled();
 	m_nxdnEnabled   = m_conf.getNXDNEnabled();
+	m_m17Enabled    = m_conf.getM17Enabled();
 	m_pocsagEnabled = m_conf.getPOCSAGEnabled();
 	m_fmEnabled     = m_conf.getFMEnabled();
 	m_ax25Enabled   = m_conf.getAX25Enabled();
@@ -1867,6 +1980,7 @@ void CMMDVMHost::readParams()
 	LogInfo("    YSF: %s", m_ysfEnabled ? "enabled" : "disabled");
 	LogInfo("    P25: %s", m_p25Enabled ? "enabled" : "disabled");
 	LogInfo("    NXDN: %s", m_nxdnEnabled ? "enabled" : "disabled");
+	LogInfo("    M17: %s", m_m17Enabled ? "enabled" : "disabled");
 	LogInfo("    POCSAG: %s", m_pocsagEnabled ? "enabled" : "disabled");
 	LogInfo("    FM: %s", m_fmEnabled ? "enabled" : "disabled");
 	LogInfo("    AX.25: %s", m_ax25Enabled ? "enabled" : "disabled");
@@ -1878,7 +1992,7 @@ void CMMDVMHost::enableModemMode(bool& mode, bool enabled)
 
 	mode = enabled;
 
-	m_modem->setModeParams(m_dstarEnabled, m_dmrEnabled, m_ysfEnabled, m_p25Enabled, m_nxdnEnabled, m_pocsagEnabled, m_fmEnabled, m_ax25Enabled);
+	m_modem->setModeParams(m_dstarEnabled, m_dmrEnabled, m_ysfEnabled, m_p25Enabled, m_nxdnEnabled, m_m17Enabled, m_pocsagEnabled, m_fmEnabled, m_ax25Enabled);
 	if (!m_modem->writeConfig())
 		LogError("Cannot write Config to MMDVM");
 }
@@ -1919,6 +2033,11 @@ void CMMDVMHost::processEnableModeCommand(unsigned char mode, bool hasController
 					m_nxdnNetwork->enable(enableMode);
 				m_nxdn->enable(enableMode);
 				break;
+			case MODE_M17:
+				if (m_m17Network != nullptr)
+					m_m17Network->enable(enableMode);
+				m_m17->enable(enableMode);
+				break;
 			case MODE_FM:
 				if (isAX25)
 					m_ax25->enable(enableMode);
@@ -1946,6 +2065,9 @@ void CMMDVMHost::processEnableModeCommand(unsigned char mode, bool hasController
 			break;
 		case MODE_NXDN:
 			while (m_modem->readNXDNData(data) > 0U);
+			break;
+		case MODE_M17:
+			while (m_modem->readM17Data(data) > 0U);
 			break;
 		case MODE_FM:
 			while ((isAX25 ? m_modem->readAX25Data(data) : m_modem->readFMData(data)) > 0U);
@@ -1978,6 +2100,8 @@ void CMMDVMHost::setMode(unsigned char mode)
 			m_p25Network->enable(false);
 		if (m_nxdnNetwork != nullptr)
 			m_nxdnNetwork->enable(false);
+		if (m_m17Network != nullptr)
+			m_m17Network->enable(false);
 		if (m_pocsagNetwork != nullptr)
 			m_pocsagNetwork->enable(false);
 		if (m_fmNetwork != nullptr)
@@ -1994,6 +2118,8 @@ void CMMDVMHost::setMode(unsigned char mode)
 			m_p25->enable(false);
 		if (m_nxdn != nullptr)
 			m_nxdn->enable(false);
+		if (m_m17 != nullptr)
+			m_m17->enable(false);
 		if (m_pocsag != nullptr)
 			m_pocsag->enable(false);
 		if (m_fm != nullptr)
@@ -2021,6 +2147,8 @@ void CMMDVMHost::setMode(unsigned char mode)
 			m_p25Network->enable(false);
 		if (m_nxdnNetwork != nullptr)
 			m_nxdnNetwork->enable(false);
+		if (m_m17Network != nullptr)
+			m_m17Network->enable(false);
 		if (m_pocsagNetwork != nullptr)
 			m_pocsagNetwork->enable(false);
 		if (m_fmNetwork != nullptr)
@@ -2037,6 +2165,8 @@ void CMMDVMHost::setMode(unsigned char mode)
 			m_p25->enable(false);
 		if (m_nxdn != nullptr)
 			m_nxdn->enable(false);
+		if (m_m17 != nullptr)
+			m_m17->enable(false);
 		if (m_pocsag != nullptr)
 			m_pocsag->enable(false);
 		if (m_fm != nullptr)
@@ -2068,6 +2198,8 @@ void CMMDVMHost::setMode(unsigned char mode)
 			m_p25Network->enable(false);
 		if (m_nxdnNetwork != nullptr)
 			m_nxdnNetwork->enable(false);
+		if (m_m17Network != nullptr)
+			m_m17Network->enable(false);
 		if (m_pocsagNetwork != nullptr)
 			m_pocsagNetwork->enable(false);
 		if (m_fmNetwork != nullptr)
@@ -2084,6 +2216,8 @@ void CMMDVMHost::setMode(unsigned char mode)
 			m_p25->enable(false);
 		if (m_nxdn != nullptr)
 			m_nxdn->enable(false);
+		if (m_m17 != nullptr)
+			m_m17->enable(false);
 		if (m_pocsag != nullptr)
 			m_pocsag->enable(false);
 		if (m_fm != nullptr)
@@ -2111,6 +2245,8 @@ void CMMDVMHost::setMode(unsigned char mode)
 			m_p25Network->enable(true);
 		if (m_nxdnNetwork != nullptr)
 			m_nxdnNetwork->enable(false);
+		if (m_m17Network != nullptr)
+			m_m17Network->enable(false);
 		if (m_pocsagNetwork != nullptr)
 			m_pocsagNetwork->enable(false);
 		if (m_fmNetwork != nullptr)
@@ -2127,6 +2263,8 @@ void CMMDVMHost::setMode(unsigned char mode)
 			m_p25->enable(true);
 		if (m_nxdn != nullptr)
 			m_nxdn->enable(false);
+		if (m_m17 != nullptr)
+			m_m17->enable(false);
 		if (m_pocsag != nullptr)
 			m_pocsag->enable(false);
 		if (m_fm != nullptr)
@@ -2154,6 +2292,8 @@ void CMMDVMHost::setMode(unsigned char mode)
 			m_p25Network->enable(false);
 		if (m_nxdnNetwork != nullptr && m_nxdnEnabled)
 			m_nxdnNetwork->enable(true);
+		if (m_m17Network != nullptr)
+			m_m17Network->enable(false);
 		if (m_pocsagNetwork != nullptr)
 			m_pocsagNetwork->enable(false);
 		if (m_fmNetwork != nullptr)
@@ -2170,6 +2310,8 @@ void CMMDVMHost::setMode(unsigned char mode)
 			m_p25->enable(false);
 		if (m_nxdn != nullptr && m_nxdnEnabled)
 			m_nxdn->enable(true);
+		if (m_m17 != nullptr)
+			m_m17->enable(false);
 		if (m_pocsag != nullptr)
 			m_pocsag->enable(false);
 		if (m_fm != nullptr)
@@ -2186,6 +2328,53 @@ void CMMDVMHost::setMode(unsigned char mode)
 		}
 		break;
 
+	case MODE_M17:
+		if (m_dstarNetwork != nullptr)
+			m_dstarNetwork->enable(false);
+		if (m_dmrNetwork != nullptr)
+			m_dmrNetwork->enable(false);
+		if (m_ysfNetwork != nullptr)
+			m_ysfNetwork->enable(false);
+		if (m_p25Network != nullptr)
+			m_p25Network->enable(false);
+		if (m_nxdnNetwork != nullptr)
+			m_nxdnNetwork->enable(false);
+		if (m_m17Network != nullptr && m_m17Enabled)
+			m_m17Network->enable(true);
+		if (m_pocsagNetwork != nullptr)
+			m_pocsagNetwork->enable(false);
+		if (m_fmNetwork != nullptr)
+			m_fmNetwork->enable(false);
+		if (m_ax25Network != nullptr)
+			m_ax25Network->enable(false);
+		if (m_dstar != nullptr)
+			m_dstar->enable(false);
+		if (m_dmr != nullptr)
+			m_dmr->enable(false);
+		if (m_ysf != nullptr)
+			m_ysf->enable(false);
+		if (m_p25 != nullptr)
+			m_p25->enable(false);
+		if (m_nxdn != nullptr)
+			m_nxdn->enable(false);
+		if (m_m17 != nullptr && m_m17Enabled)
+			m_m17->enable(true);
+		if (m_pocsag != nullptr)
+			m_pocsag->enable(false);
+		if (m_fm != nullptr)
+			m_fm->enable(false);
+		if (m_ax25 != nullptr)
+			m_ax25->enable(false);
+		if (m_m17Enabled) {
+			m_modem->setMode(MODE_M17);
+			m_mode = MODE_M17;
+			m_modeTimer.start();
+			m_cwIdTimer.stop();
+			createLockFile("M17");
+			LogMessage("Mode set to M17");
+		}
+		break;
+
 	case MODE_POCSAG:
 		if (m_dstarNetwork != nullptr)
 			m_dstarNetwork->enable(false);
@@ -2197,6 +2386,8 @@ void CMMDVMHost::setMode(unsigned char mode)
 			m_p25Network->enable(false);
 		if (m_nxdnNetwork != nullptr)
 			m_nxdnNetwork->enable(false);
+		if (m_m17Network != nullptr)
+			m_m17Network->enable(false);
 		if (m_pocsagNetwork != nullptr && m_pocsagEnabled)
 			m_pocsagNetwork->enable(true);
 		if (m_fmNetwork != nullptr)
@@ -2213,6 +2404,8 @@ void CMMDVMHost::setMode(unsigned char mode)
 			m_p25->enable(false);
 		if (m_nxdn != nullptr)
 			m_nxdn->enable(false);
+		if (m_m17 != nullptr)
+			m_m17->enable(false);
 		if (m_pocsag != nullptr && m_pocsagEnabled)
 			m_pocsag->enable(true);
 		if (m_fm != nullptr)
@@ -2238,6 +2431,8 @@ void CMMDVMHost::setMode(unsigned char mode)
 			m_p25Network->enable(false);
 		if (m_nxdnNetwork != nullptr)
 			m_nxdnNetwork->enable(false);
+		if (m_m17Network != nullptr)
+			m_m17Network->enable(false);
 		if (m_pocsagNetwork != nullptr)
 			m_pocsagNetwork->enable(false);
 		if (m_fmNetwork != nullptr && m_fmEnabled)
@@ -2254,6 +2449,8 @@ void CMMDVMHost::setMode(unsigned char mode)
 			m_p25->enable(false);
 		if (m_nxdn != nullptr)
 			m_nxdn->enable(false);
+		if (m_m17 != nullptr)
+			m_m17->enable(false);
 		if (m_pocsag != nullptr)
 			m_pocsag->enable(false);
 		if (m_fm != nullptr && m_fmEnabled)
@@ -2286,6 +2483,8 @@ void CMMDVMHost::setMode(unsigned char mode)
 			m_p25Network->enable(false);
 		if (m_nxdnNetwork != nullptr)
 			m_nxdnNetwork->enable(false);
+		if (m_m17Network != nullptr)
+			m_m17Network->enable(false);
 		if (m_pocsagNetwork != nullptr)
 			m_pocsagNetwork->enable(false);
 		if (m_fmNetwork != nullptr)
@@ -2302,6 +2501,8 @@ void CMMDVMHost::setMode(unsigned char mode)
 			m_p25->enable(false);
 		if (m_nxdn != nullptr)
 			m_nxdn->enable(false);
+		if (m_m17 != nullptr)
+			m_m17->enable(false);
 		if (m_pocsag != nullptr)
 			m_pocsag->enable(false);
 		if (m_fm != nullptr)
@@ -2333,6 +2534,8 @@ void CMMDVMHost::setMode(unsigned char mode)
 			m_p25Network->enable(false);
 		if (m_nxdnNetwork != nullptr)
 			m_nxdnNetwork->enable(false);
+		if (m_m17Network != nullptr)
+			m_m17Network->enable(false);
 		if (m_pocsagNetwork != nullptr)
 			m_pocsagNetwork->enable(false);
 		if (m_fmNetwork != nullptr)
@@ -2349,6 +2552,8 @@ void CMMDVMHost::setMode(unsigned char mode)
 			m_p25->enable(false);
 		if (m_nxdn != nullptr)
 			m_nxdn->enable(false);
+		if (m_m17 != nullptr)
+			m_m17->enable(false);
 		if (m_pocsag != nullptr)
 			m_pocsag->enable(false);
 		if (m_fm != nullptr)
@@ -2378,6 +2583,8 @@ void CMMDVMHost::setMode(unsigned char mode)
 			m_p25Network->enable(true);
 		if (m_nxdnNetwork != nullptr && m_nxdnEnabled)
 			m_nxdnNetwork->enable(true);
+		if (m_m17Network != nullptr && m_m17Enabled)
+			m_m17Network->enable(true);
 		if (m_pocsagNetwork != nullptr && m_pocsagEnabled)
 			m_pocsagNetwork->enable(true);
 		if (m_fmNetwork != nullptr && m_fmEnabled)
@@ -2394,6 +2601,8 @@ void CMMDVMHost::setMode(unsigned char mode)
 			m_p25->enable(true);
 		if (m_nxdn != nullptr && m_nxdnEnabled)
 			m_nxdn->enable(true);
+		if (m_m17 != nullptr && m_m17Enabled)
+			m_m17->enable(true);
 		if (m_pocsag != nullptr && m_pocsagEnabled)
 			m_pocsag->enable(true);
 		if (m_fm != nullptr && m_fmEnabled)
@@ -2476,6 +2685,10 @@ void CMMDVMHost::remoteControl()
 		if (m_nxdn != nullptr)
 			processModeCommand(MODE_NXDN, m_nxdnRFModeHang);
 		break;
+	case REMOTE_COMMAND::MODE_M17:
+		if (m_m17 != nullptr)
+			processModeCommand(MODE_M17, m_m17RFModeHang);
+		break;
 	case REMOTE_COMMAND::MODE_FM:
 		if (m_fmEnabled)
 			processModeCommand(MODE_FM, 0);
@@ -2494,6 +2707,9 @@ void CMMDVMHost::remoteControl()
 		break;
 	case REMOTE_COMMAND::ENABLE_NXDN:
 		processEnableModeCommand(MODE_NXDN, (m_nxdn != nullptr), m_nxdnEnabled, true);
+		break;
+	case REMOTE_COMMAND::ENABLE_M17:
+		processEnableModeCommand(MODE_M17, (m_m17 != nullptr), m_m17Enabled, true);
 		break;
 	case REMOTE_COMMAND::ENABLE_FM:
 		processEnableModeCommand(MODE_FM, (m_fm != nullptr), m_fmEnabled, true);
@@ -2515,6 +2731,9 @@ void CMMDVMHost::remoteControl()
 		break;
 	case REMOTE_COMMAND::DISABLE_NXDN:
 		processEnableModeCommand(MODE_NXDN, (m_nxdn != nullptr), m_nxdnEnabled, false);
+		break;
+	case REMOTE_COMMAND::DISABLE_M17:
+		processEnableModeCommand(MODE_M17, (m_m17 != nullptr), m_m17Enabled, false);
 		break;
 	case REMOTE_COMMAND::DISABLE_FM:
 		processEnableModeCommand(MODE_FM, (m_fm != nullptr), m_fmEnabled, false);
@@ -2611,6 +2830,7 @@ void CMMDVMHost::buildNetworkStatusString(std::string &str)
 	str += std::string(" ysf:") + (((m_ysfNetwork == nullptr) || (m_ysfEnabled == false)) ? "n/a" : (m_ysfNetwork->isConnected() ? "conn" : "disc"));
 	str += std::string(" p25:") + (((m_p25Network == nullptr) || (m_p25Enabled == false)) ? "n/a" : (m_p25Network->isConnected() ? "conn" : "disc"));
 	str += std::string(" nxdn:") + (((m_nxdnNetwork == nullptr) || (m_nxdnEnabled == false)) ? "n/a" : (m_nxdnNetwork->isConnected() ? "conn" : "disc"));
+	str += std::string(" m17:") + (((m_m17Network == nullptr) || (m_m17Enabled == false)) ? "n/a" : (m_m17Network->isConnected() ? "conn" : "disc"));
 	str += std::string(" fm:") + (m_fmEnabled ? "conn" : "n/a");
 }
 
@@ -2644,5 +2864,6 @@ void CMMDVMHost::buildNetworkHostsString(std::string &str)
 	str += std::string(" ysf:\"") + ((m_ysfEnabled && (m_ysfNetwork != nullptr)) ? m_conf.getFusionNetworkGatewayAddress() : "NONE") + "\"";
 	str += std::string(" p25:\"") + ((m_p25Enabled && (m_p25Network != nullptr)) ? m_conf.getP25GatewayAddress() : "NONE") + "\"";
 	str += std::string(" nxdn:\"") + ((m_nxdnEnabled && (m_nxdnNetwork != nullptr)) ? m_conf.getNXDNGatewayAddress() : "NONE") + "\"";
+	str += std::string(" m17:\"") + ((m_m17Enabled && (m_m17Network != nullptr)) ? m_conf.getM17GatewayAddress() : "NONE") + "\"";
 	str += std::string(" fm:\"") + ((m_fmEnabled && (m_fmNetwork != nullptr)) ? m_conf.getFMGatewayAddress() : "NONE") + "\"";
 }
