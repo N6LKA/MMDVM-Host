@@ -98,7 +98,6 @@ bool CP25Data::decodeHeader(const unsigned char* data)
 	}
 
 	m_mfId  = rs[9U];						// Mfg Id.
-/*
 	m_algId = rs[10U];						// Algorithm ID
 
 	if (m_algId != P25_ALGO_UNENCRYPT) {
@@ -110,7 +109,6 @@ bool CP25Data::decodeHeader(const unsigned char* data)
 
 		m_kId = 0x0000U;
 	}
-*/
 	return true;
 }
 
@@ -291,7 +289,6 @@ bool CP25Data::decodeLDU2(const unsigned char* data)
 		CUtils::dump(2U, "P25, RS crashed with input data", rs, 18U);
 		return false;
 	}
-/*
 	m_algId = rs[9U];                                                    // Algorithm ID
 
 	if (m_algId != P25_ALGO_UNENCRYPT) {
@@ -304,7 +301,6 @@ bool CP25Data::decodeLDU2(const unsigned char* data)
 
 		m_kId = 0x0000U;
 	}
-*/
 	return true;
 }
 
