@@ -47,6 +47,7 @@
 #include <signal.h>
 #include <fcntl.h>
 #include <pwd.h>
+#include <grp.h>
 #endif
 
 #if defined(_WIN32) || defined(_WIN64)
@@ -247,6 +248,11 @@ int CMMDVMHost::run()
 			gid_t mmdvm_gid = user->pw_gid;
 
 			// Set user and group ID's to mmdvm:mmdvm
+			if (::initgroups("mmdvm", mmdvm_gid) != 0) {
+				::fprintf(stderr, "Could not set mmdvm supplementary groups, exiting\n");
+				return -1;
+			}
+
 			if (::setgid(mmdvm_gid) != 0) {
 				::fprintf(stderr, "Could not set mmdvm GID, exiting\n");
 				return -1;
