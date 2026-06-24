@@ -1,3 +1,182 @@
+# MMDVM-Host — N6LKA Fork (P25 AES Passthrough)
+
+> **License Notice**: The modifications in this fork enable P25 AES encryption passthrough for use on **licensed Part 90 business/public safety frequencies**. P25 encryption is **not permitted on amateur radio (Part 97)** frequencies. Ensure you operate only on frequencies for which you hold a valid FCC license authorizing encrypted voice communications.
+
+This is a fork of [M17-Project/MMDVMHost](https://github.com/M17-Project/MMDVMHost) with modifications to enable P25 AES (Advanced Encryption Standard) voice passthrough on a Pi-Star repeater. The upstream base preserves full **M17, DMR, D-Star, P25, NXDN, System Fusion, POCSAG, FM, and AX.25** functionality.
+
+## What This Fork Changes
+
+MMDVMHost's P25 AES handling had three issues that prevented encrypted audio from passing through a repeater correctly:
+
+1. **P25Data.cpp** — `decodeHeader()` and `decodeLDU2()`: Code to read AlgID, Message Indicator (MI), and Key ID (KID) from incoming frames was commented out. Without this, every transmission was treated as unencrypted (algId=0, MI=zeros, kId=0).
+
+2. **P25Control.cpp** — `m_audio.process()` (IMBE FEC): Forward error correction was applied to every audio frame, including encrypted ones. FEC corrupts AES ciphertext — encrypted IMBE frames must pass through untouched.
+
+3. **P25Control.cpp** — HDU/LDU1 sequencing: The AlgID decoded from the HDU (header) was cleared by `m_rfData.reset()` before the first LDU1 was processed, causing the first voice frame to always be treated as unencrypted.
+
+**Commits applied:**
+- `7e96eda` — P25Data.cpp: Uncomment algId/MI/kId decode blocks in `decodeHeader()` and `decodeLDU2()`
+- `cf69c53` — MMDVMHost.cpp: Add `initgroups()` call before privilege drop so daemon mode inherits the `dialout` supplementary group (required to open the serial port on Pi-Star)
+- `9487b32` — P25Control.cpp: Guard IMBE FEC behind unencrypted check; save/restore HDU algId across reset; uncomment `decodeLDU2()` call in AUDIO state
+
+---
+
+## Installation on Pi-Star
+
+These instructions assume Pi-Star 4.1.x on a Raspberry Pi with an MMDVM board.
+
+### Prerequisites
+
+- SSH access to the Pi-Star node
+- Pi-Star filesystem must be writable (`rpi-rw`) for all write operations
+- Sufficient RAM for compilation (~256 MB free recommended)
+
+> **Important**: Build from the home directory (`~/`), **not** `/tmp`. Pi-Star's `/tmp` is a small tmpfs RAM disk that runs out of space during compilation.
+
+### Step 1 — Clone and Build
+
+```bash
+rpi-rw
+cd ~
+git clone https://github.com/N6LKA/MMDVM-Host
+cd MMDVM-Host
+make
+```
+
+Compilation takes several minutes on a Raspberry Pi. Only the `MMDVMHost` binary is needed from the build output.
+
+### Step 2 — Stop the Running Service
+
+```bash
+sudo systemctl stop mmdvmhost.timer
+sudo systemctl stop mmdvmhost.service
+```
+
+### Step 3 — Backup and Install
+
+```bash
+sudo cp /usr/local/bin/MMDVMHost /usr/local/bin/MMDVMHost.bak
+sudo cp ~/MMDVM-Host/MMDVMHost /usr/local/bin/MMDVMHost
+```
+
+### Step 4 — Protect the Binary from Pi-Star Auto-Updates
+
+Pi-Star's daily cron (`/etc/cron.daily/pistar-daily`) runs `git pull` on `/usr/local/bin`, which would overwrite the custom binary with the upstream pre-built. Protect against this with `skip-worktree`:
+
+```bash
+cd /usr/local/bin
+sudo git update-index --skip-worktree MMDVMHost
+```
+
+Verify it's set (should show `S MMDVMHost`):
+
+```bash
+sudo git -C /usr/local/bin ls-files -v MMDVMHost
+```
+
+### Step 5 — Start and Verify
+
+```bash
+rpi-ro
+sudo systemctl start mmdvmhost.service
+sudo systemctl status mmdvmhost.service
+```
+
+Check the log for successful startup:
+
+```bash
+tail -f /var/log/pi-star/MMDVM-$(date +%Y-%m-%d).log
+```
+
+You should see mode lines such as `P25, Starting` and no serial port errors.
+
+> **Note**: On the very first boot after installation, the log file may be owned by `root` (created by the old binary before it was replaced). If MMDVMHost fails to open the log, fix ownership and restart:
+> ```bash
+> sudo chown mmdvm:mmdvm /var/log/pi-star/MMDVM-$(date +%Y-%m-%d).log
+> sudo systemctl restart mmdvmhost.service
+> ```
+> This is a one-time issue; the log directory is a tmpfs and clears on every reboot.
+
+---
+
+## Allowing Any Radio ID to Key the Repeater
+
+By default, Pi-Star only allows the owner's RadioID.net-registered DMR ID to key the repeater. To allow any Radio ID (including custom or non-registered IDs required for encrypted channels):
+
+Edit `/etc/mmdvmhost` (Pi-Star dashboard → Configuration → Expert → MMDVMHost) and add or change in the `[P25]` section:
+
+```ini
+[P25]
+OverrideUIDCheck=1
+```
+
+- `0` (default) — only the owner's registered ID can key the repeater
+- `1` — any Radio ID can key the repeater
+
+---
+
+## Uninstalling / Rolling Back to the Original Binary
+
+If you need to revert to the original Pi-Star MMDVMHost binary:
+
+```bash
+rpi-rw
+
+# Remove skip-worktree protection first
+sudo git -C /usr/local/bin update-index --no-skip-worktree MMDVMHost
+
+# Stop the service
+sudo systemctl stop mmdvmhost.timer
+sudo systemctl stop mmdvmhost.service
+
+# Restore the backup
+sudo cp /usr/local/bin/MMDVMHost.bak /usr/local/bin/MMDVMHost
+
+rpi-ro
+
+# Restart
+sudo systemctl start mmdvmhost.service
+sudo systemctl status mmdvmhost.service
+```
+
+Alternatively, to pull a fresh upstream pre-built via Pi-Star's normal update mechanism (without restoring from backup):
+
+```bash
+rpi-rw
+sudo git -C /usr/local/bin update-index --no-skip-worktree MMDVMHost
+cd /usr/local/bin
+sudo git pull
+rpi-ro
+sudo systemctl restart mmdvmhost.service
+```
+
+---
+
+## Re-enabling Auto-Updates
+
+To allow Pi-Star's daily update to overwrite the custom binary (e.g., for a Pi-Star version upgrade):
+
+```bash
+rpi-rw
+sudo git -C /usr/local/bin update-index --no-skip-worktree MMDVMHost
+rpi-ro
+```
+
+After Pi-Star updates and you want to re-protect the binary, repeat Steps 1–4 from the installation instructions and re-apply `--skip-worktree`.
+
+To check protection status at any time:
+
+```bash
+sudo git -C /usr/local/bin ls-files -v MMDVMHost
+```
+
+- `S MMDVMHost` — protected (skip-worktree set; auto-updates will not overwrite)
+- `H MMDVMHost` — unprotected (auto-updates will overwrite on next `git pull`)
+
+---
+
+## Original README
+
 These are the source files for building the MMDVMHost, the program that
 interfaces to the MMDVM or DVMega on the one side, and a suitable network on
 the other. It supports D-Star, DMR, P25 Phase 1, NXDN, System Fusion, M17,
