@@ -78,6 +78,7 @@ sudo git -C /usr/local/bin ls-files -v MMDVMHost
 
 ```bash
 rpi-ro
+sudo systemctl start mmdvmhost.timer
 sudo systemctl start mmdvmhost.service
 sudo systemctl status mmdvmhost.service
 ```
@@ -135,6 +136,7 @@ sudo cp /usr/local/bin/MMDVMHost.bak /usr/local/bin/MMDVMHost
 rpi-ro
 
 # Restart
+sudo systemctl start mmdvmhost.timer
 sudo systemctl start mmdvmhost.service
 sudo systemctl status mmdvmhost.service
 ```
@@ -147,6 +149,7 @@ sudo git -C /usr/local/bin update-index --no-skip-worktree MMDVMHost
 cd /usr/local/bin
 sudo git pull
 rpi-ro
+sudo systemctl start mmdvmhost.timer
 sudo systemctl restart mmdvmhost.service
 ```
 
