@@ -101,7 +101,7 @@ You should see mode lines such as `P25, Starting` and no serial port errors.
 
 ## Allowing Any Radio ID to Key the Repeater
 
-By default, Pi-Star only allows the owner's RadioID.net-registered DMR ID to key the repeater. To allow any Radio ID (including custom or non-registered IDs required for encrypted channels):
+Pi-Star downloads a Radio ID list from RadioID.net and by default rejects any transmission whose source ID is not on that list. To bypass this check and allow any Radio ID (including custom or non-registered IDs required for encrypted channels):
 
 Edit `/etc/mmdvmhost` (Pi-Star dashboard → Configuration → Expert → MMDVMHost) and add or change in the `[P25]` section:
 
@@ -110,8 +110,8 @@ Edit `/etc/mmdvmhost` (Pi-Star dashboard → Configuration → Expert → MMDVMH
 OverrideUIDCheck=1
 ```
 
-- `0` (default) — only the owner's registered ID can key the repeater
-- `1` — any Radio ID can key the repeater
+- `0` (default) — checks the source Radio ID against the RadioID.net downloaded list; IDs not on the list are rejected
+- `1` — ignores the RadioID.net list and allows transmissions from any Radio ID
 
 ---
 
