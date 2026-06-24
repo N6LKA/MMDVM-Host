@@ -237,11 +237,24 @@ bool CP25Control::writeModem(unsigned char* data, unsigned int len)
 		}
 	} else if (duid == P25_DUID_LDU1) {
 		if (m_rfState == RPT_RF_STATE::LISTENING) {
+			// Preserve encryption params decoded from HDU before reset clears them
+			unsigned char savedAlgId = m_rfData.getAlgId();
+			unsigned int savedKId = m_rfData.getKId();
+			unsigned char savedMI[P25_MI_LENGTH_BYTES];
+			m_rfData.getMI(savedMI);
+
 			m_rfData.reset();
 			bool ret = m_rfData.decodeLDU1(data + 2U);
 			if (!ret) {
 				m_lastDUID = duid;
 				return false;
+			}
+
+			// Restore HDU encryption params so first LDU1 skips audio FEC
+			if (savedAlgId != P25_ALGO_UNENCRYPT) {
+				m_rfData.setAlgId(savedAlgId);
+				m_rfData.setKId(savedKId);
+				m_rfData.setMI(savedMI);
 			}
 
 			unsigned int srcId = m_rfData.getSrcId();
@@ -311,14 +324,14 @@ bool CP25Control::writeModem(unsigned char* data, unsigned int len)
 			// Regenerate the Low Speed Data
 			m_rfLSD.process(data + 2U);
 
-			// Regenerate Audio
-			unsigned int errors = m_audio.process(data + 2U);
-			LogDebug("P25, LDU1 audio, errs: %u/1233 (%.1f%%)", errors, float(errors) / 12.33F);
-
-			m_display->writeP25BER(float(errors) / 12.33F);
-
-			m_rfBits += 1233U;
-			m_rfErrs += errors;
+			// Regenerate Audio — skip FEC on encrypted frames to avoid corrupting ciphertext
+			if (m_rfData.getAlgId() == P25_ALGO_UNENCRYPT) {
+				unsigned int errors = m_audio.process(data + 2U);
+				LogDebug("P25, LDU1 audio, errs: %u/1233 (%.1f%%)", errors, float(errors) / 12.33F);
+				m_display->writeP25BER(float(errors) / 12.33F);
+				m_rfBits += 1233U;
+				m_rfErrs += errors;
+			}
 			m_rfFrames++;
 			m_lastDUID = duid;
 
@@ -343,16 +356,9 @@ bool CP25Control::writeModem(unsigned char* data, unsigned int len)
 		}
 	} else if (duid == P25_DUID_LDU2) {
 		if (m_rfState == RPT_RF_STATE::AUDIO) {
-/*
-			bool ret = m_rfData.decodeLDU2(data + 2U);
-			if (!ret) {
-				LogWarning("P25, LDU2 undecodable LC, using last LDU2 LC");
-				m_rfData = m_rfLastLDU2;
-				m_rfUndecodableLC++;
-			} else {
-				m_rfLastLDU2 = m_rfData;
-			}
-*/
+			// Decode LDU2 to get current algId/MI/kId — MI changes each LDU pair
+			m_rfData.decodeLDU2(data + 2U);
+
 			writeNetwork(m_rfLDU, m_lastDUID, false);
 
 			// Regenerate Sync
@@ -367,14 +373,14 @@ bool CP25Control::writeModem(unsigned char* data, unsigned int len)
 			// Regenerate the Low Speed Data
 			m_rfLSD.process(data + 2U);
 
-			// Regenerate Audio
-			unsigned int errors = m_audio.process(data + 2U);
-			LogDebug("P25, LDU2 audio, errs: %u/1233 (%.1f%%)", errors, float(errors) / 12.33F);
-
-			m_display->writeP25BER(float(errors) / 12.33F);
-
-			m_rfBits += 1233U;
-			m_rfErrs += errors;
+			// Regenerate Audio — skip FEC on encrypted frames to avoid corrupting ciphertext
+			if (m_rfData.getAlgId() == P25_ALGO_UNENCRYPT) {
+				unsigned int errors = m_audio.process(data + 2U);
+				LogDebug("P25, LDU2 audio, errs: %u/1233 (%.1f%%)", errors, float(errors) / 12.33F);
+				m_display->writeP25BER(float(errors) / 12.33F);
+				m_rfBits += 1233U;
+				m_rfErrs += errors;
+			}
 			m_rfFrames++;
 			m_lastDUID = duid;
 
