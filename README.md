@@ -85,20 +85,21 @@ sudo systemctl start mmdvmhost.service
 sudo systemctl status mmdvmhost.service
 ```
 
-Check the log for successful startup:
+Check the log for successful startup (MMDVMHost names log files using UTC date):
 
 ```bash
-tail -f /var/log/pi-star/MMDVM-$(date +%Y-%m-%d).log
+tail -f /var/log/pi-star/MMDVM-$(date -u +%Y-%m-%d).log
 ```
 
 You should see mode lines such as `P25, Starting` and no serial port errors.
 
-> **Note**: On the very first boot after installation, the log file may be owned by `root` (created by the old binary before it was replaced). If MMDVMHost fails to open the log, fix ownership and restart:
+> **Note**: On the very first start after installation, the log file may be owned by `root` (created by the old binary before it was replaced). If MMDVMHost fails with "unable to open the log file", fix the ownership and restart. MMDVMHost names its log file using the **UTC date** — use `date -u` to get the correct filename, or check `ls /var/log/pi-star/` to find the right file:
 > ```bash
-> sudo chown mmdvm:mmdvm /var/log/pi-star/MMDVM-$(date +%Y-%m-%d).log
-> sudo systemctl restart mmdvmhost.service
+> ls /var/log/pi-star/MMDVM-*.log
+> sudo chown mmdvm:mmdvm /var/log/pi-star/MMDVM-$(date -u +%Y-%m-%d).log
+> sudo systemctl start mmdvmhost.service
 > ```
-> This is a one-time issue; the log directory is a tmpfs and clears on every reboot.
+> This is a one-time issue. The log directory is a tmpfs that clears on every reboot — after a reboot the new binary creates the log file itself as the `mmdvm` user and there is no ownership conflict.
 
 ---
 
