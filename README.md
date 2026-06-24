@@ -28,12 +28,14 @@ These instructions assume Pi-Star 4.1.x on a Raspberry Pi with an MMDVM board.
 ### Prerequisites
 
 - SSH access to the Pi-Star node
-- Pi-Star filesystem must be writable (`rpi-rw`) for all write operations
 - Sufficient RAM for compilation (~256 MB free recommended)
 
-> **Important**: Build from the home directory (`~/`), **not** `/tmp`. Pi-Star's `/tmp` is a small tmpfs RAM disk that runs out of space during compilation.
+> **Important — read before starting:**
+> - Run `rpi-rw` **once at the beginning** and do **not** run `rpi-ro` until the very last step. The entire process (clone, build, stop service, copy binary, set skip-worktree) must be done while the filesystem is read-write. If you run `rpi-ro` early or the session drops and remounts read-only, `make` and `sudo cp` will fail with "Read-only file system" errors.
+> - Build from the home directory (`~/`), **not** `/tmp`. Pi-Star's `/tmp` is a small tmpfs RAM disk that runs out of space during compilation.
+> - `make` does **not** need `sudo` — but the filesystem must be read-write when you run it.
 
-### Step 1 — Clone and Build
+### Step 1 — Make Filesystem Writable, Clone and Build
 
 ```bash
 rpi-rw
@@ -74,7 +76,7 @@ Verify it's set (should show `S MMDVMHost`):
 sudo git -C /usr/local/bin ls-files -v MMDVMHost
 ```
 
-### Step 5 — Start and Verify
+### Step 5 — Return to Read-Only, Start and Verify
 
 ```bash
 rpi-ro
@@ -165,7 +167,7 @@ sudo git -C /usr/local/bin update-index --no-skip-worktree MMDVMHost
 rpi-ro
 ```
 
-After Pi-Star updates and you want to re-protect the binary, repeat Steps 1–4 from the installation instructions and re-apply `--skip-worktree`.
+After Pi-Star updates and you want to re-protect the binary, repeat Steps 1–5 from the installation instructions and re-apply `--skip-worktree`.
 
 To check protection status at any time:
 
